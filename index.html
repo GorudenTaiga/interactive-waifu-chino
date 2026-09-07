@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kafuu Chino 3D - Rabbit House Interaktif</title>
+  
+  <!-- Modern Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Main Stylesheet -->
+  <link rel="stylesheet" href="/src/styles/main.css">
+</head>
+<body>
+
+  <!-- Loading Screen -->
+  <div id="loading-screen">
+    <div class="spinner"></div>
+    <div class="loading-text" id="loading-progress">Memuat Kafuu Chino 3D...</div>
+  </div>
+
+  <!-- 3D WebGL Canvas -->
+  <div id="canvas-container">
+    <canvas id="webgl-canvas"></canvas>
+  </div>
+
+  <!-- UI Overlay -->
+  <div id="ui-overlay">
+    
+    <!-- Header Top Bar -->
+    <header class="header-bar">
+      <div class="brand-badge glass-panel">
+        <span class="brand-icon">☕</span>
+        <div>
+          <h1 class="brand-title">Rabbit House</h1>
+          <p class="brand-subtitle">Kafuu Chino 3D AI Companion</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <!-- Sound Toggle Button (Default Active) -->
+        <button id="sound-toggle-btn" class="icon-btn active" title="Suara TTS Aktif" aria-label="Toggle Voice">
+          🔊
+        </button>
+
+        <!-- Reset History Button -->
+        <button id="reset-btn" class="icon-btn" title="Reset Percakapan" aria-label="Reset Chat">
+          🔄
+        </button>
+
+        <!-- Settings Modal Button -->
+        <button id="settings-btn" class="icon-btn" title="Pengaturan AI & Voice" aria-label="Settings">
+          ⚙️
+        </button>
+      </div>
+    </header>
+
+    <!-- Floating Dialogue Speech Bubble -->
+    <div class="dialogue-wrapper">
+      <div class="dialogue-card glass-panel">
+        <div class="dialogue-header">
+          <div class="character-tag">
+            <span class="character-name">香風 智乃 (Chino)</span>
+            <div id="mood-badge" class="mood-badge">
+              <span>😊</span> <span>Senang</span>
+            </div>
+          </div>
+          
+          <!-- Audio Wave Visualizer -->
+          <div id="voice-wave" class="voice-wave-indicator" title="Chino sedang berbicara">
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+          </div>
+        </div>
+
+        <div id="dialogue-text" class="dialogue-body">
+          Irasshaimase, Taiga-san! Selamat datang di Rabbit House. Mau menikmati kopi apa hari ini?
+        </div>
+
+        <small id="provider-badge" class="provider-badge">Brain: Rabbit House Engine</small>
+      </div>
+    </div>
+
+    <!-- Bottom Controls & Input Area -->
+    <div class="bottom-bar">
+      <!-- Quick Prompt Suggestions -->
+      <div class="quick-prompts">
+        <button class="quick-chip" data-prompt="Bikinkan secangkir kopi hangat dong, Chino! ☕">
+          ☕ Pesan Kopi
+        </button>
+        <button class="quick-chip" data-prompt="Tippy ada di mana sekarang? 🐰">
+          🐰 Tippy di mana?
+        </button>
+        <button class="quick-chip" data-prompt="Chino hari ini manis dan imut sekali! 💖">
+          💖 Puji Chino
+        </button>
+        <button class="quick-chip" data-prompt="Apakah Chino anak kecil? 🌸">
+          🌸 Kamu anak kecil?
+        </button>
+      </div>
+
+      <!-- Chat Input Container -->
+      <form id="chat-form" class="input-container glass-panel">
+        <button type="button" id="mic-btn" class="mic-btn" title="Bicara lewat Mikrofon" aria-label="Mic">
+          🎙️
+        </button>
+
+        <input 
+          type="text" 
+          id="chat-input" 
+          class="chat-input" 
+          placeholder="Ketik pesan untuk Chino... (atau tekan mic)" 
+          autocomplete="off"
+        />
+
+        <button type="submit" id="send-btn" class="send-btn" title="Kirim Pesan" aria-label="Send">
+          ➤
+        </button>
+      </form>
+    </div>
+
+  </div>
+
+  <!-- Settings & Guide Modal -->
+  <div id="settings-modal" class="modal-overlay">
+    <div class="modal-content glass-panel">
+      <div class="modal-header">
+        <h2 class="modal-title">⚙️ Pengaturan AI & Voice</h2>
+        <button id="close-modal-btn" class="close-btn" aria-label="Close">&times;</button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Provider AI:</label>
+        <select id="setting-provider" class="form-select">
+          <option value="auto">Auto (OpenAI ➔ Ollama ➔ Smart Mock)</option>
+          <option value="openai">OpenAI GPT-4o-mini</option>
+          <option value="ollama">Ollama Local AI (qwen2.5 / llama3)</option>
+          <option value="mock">Smart Offline Mock</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">OpenAI API Key (Di .env):</label>
+        <input type="password" id="setting-api-key" class="form-input" placeholder="sk-..." readonly value="Tersimpan di .env" />
+        <small style="color: var(--text-muted); font-size: 0.75rem; margin-top: 4px; display: block;">
+          Dapatkan di <a href="https://platform.openai.com/" target="_blank" style="color: var(--accent-chino-blue);">platform.openai.com</a>
+        </small>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Custom Voice Model Endpoint (TTS):</label>
+        <input type="text" id="setting-tts-endpoint" class="form-input" placeholder="http://localhost:50021/voice" value="http://localhost:50021/voice" />
+        <small style="color: var(--text-muted); font-size: 0.75rem; margin-top: 4px; display: block;">
+          Mendukung endpoint Voicevox / RVC / Custom Audio Server.
+        </small>
+      </div>
+
+      <div class="modal-actions">
+        <button id="save-settings-btn" class="btn-primary">Tutup</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Entry Script -->
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
