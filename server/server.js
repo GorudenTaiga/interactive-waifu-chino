@@ -98,7 +98,7 @@ io.on('connection', (socket) => {
 
   // Welcome event
   socket.emit('chino_response', {
-    text: "Irasshaimase, Taiga-san! Selamat datang di Rabbit House. Mau menikmati kopi apa hari ini?",
+    text: "いらっしゃいませ、タイガさん！ラビットハウスへようこそ。今日はどんなコーヒーを淹れましょうか？",
     emotion: "happy",
     action: "nod",
     provider: "System Greeting"
@@ -170,4 +170,5 @@ server.listen(PORT, () => {
      Custom TTS: ${customTts.isEnabled() ? 'Aktif' : 'Non-aktif (Browser Web Speech)'}
   ☕ ========================================== ☕
   `);
+  chinoBrain.checkOpenRouterKey();
 });
