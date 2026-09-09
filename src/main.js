@@ -108,6 +108,14 @@ class ChinoApp {
   }
 
   bindEvents() {
+    window.addEventListener('pointermove', (event) => {
+      if (!this.animationController) return;
+
+      const x = (event.clientX / window.innerWidth) * 2 - 1;
+      const y = (event.clientY / window.innerHeight) * 2 - 1;
+      this.animationController.setMousePosition(x, y);
+    });
+
     // 1. Kirim pesan dari UI Chat
     this.chatUI.onSendMessage = (text) => {
       if (this.socket && this.socket.connected) {
