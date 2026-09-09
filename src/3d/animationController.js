@@ -1,5 +1,118 @@
 import * as THREE from 'three';
 
+// ── Shorthand ─────────────────────────────────────────────────────────────────
+const DEG = THREE.MathUtils.degToRad;
+
+// ── Rest Pose (degrees) ───────────────────────────────────────────────────────
+// Baseline arm rotations when idle. Tweak these to change the default stance.
+const REST_POSE = {
+  lArm:   { x:  10, y:  12, z: -58 },
+  rArm:   { x:  10, y: -12, z:  58 },
+  lElbow: { x:   0, y:  25, z:  20 },
+  rElbow: { x:   0, y: -25, z: -20 },
+  lWrist: { x:   0, y:   0, z: -10 },
+  rWrist: { x:   0, y:   0, z:  10 },
+};
+
+// ── Gesture Durations (seconds) ───────────────────────────────────────────────
+const GESTURE_DURATIONS = {
+  wave:           3.2,
+  present_coffee: 3.5,
+  serve:          3.5,
+  shy_pose:       3.0,
+  blush:          3.0,
+  pout_pose:      3.0,
+  think:          3.0,
+  happy_bounce:   2.2,
+  nod:            1.6,
+  tilt_head:      2.5,
+};
+
+// ── Gesture → Auto-Emotion Map ────────────────────────────────────────────────
+const GESTURE_EMOTIONS = {
+  wave:           'happy',
+  happy_bounce:   'happy',
+  shy_pose:       'shy',
+  blush:          'shy',
+  pout_pose:      'pout',
+  present_coffee: 'happy',
+  serve:          'happy',
+};
+
+// ── Target Arm Poses per Gesture (degrees) ────────────────────────────────────
+// Only bones that differ from REST_POSE need to be specified.
+// Unspecified bones will keep their rest pose + breathing offset.
+const GESTURE_POSES = {
+
+  // Cute shy wave — right hand in front of chest, wrist oscillates gently
+  wave: {
+    rArm:   { x: -25, y: -10, z:  35 },
+    rElbow: { x:   0, y: -10, z: -80 },
+    rWrist: { x:   0, y:   0, z:   0 },  // oscillation applied dynamically
+  },
+
+  // Holding a tray/cup — both hands forward & level, palms facing up
+  present_coffee: {
+    lArm:   { x: -40, y:  20, z: -30 },
+    rArm:   { x: -40, y: -20, z:  30 },
+    lElbow: { x:   0, y:  35, z:  55 },
+    rElbow: { x:   0, y: -35, z: -55 },
+    lWrist: { x: -20, y: -15, z:  -5 },
+    rWrist: { x: -20, y:  15, z:   5 },
+  },
+
+  // Hands clasped at chest — bashful, fingers touching
+  shy_pose: {
+    lArm:   { x: -20, y:  30, z: -25 },
+    rArm:   { x: -20, y: -30, z:  25 },
+    lElbow: { x:   0, y:  25, z:  85 },
+    rElbow: { x:   0, y: -25, z: -85 },
+    lWrist: { x:   0, y: -15, z: -20 },
+    rWrist: { x:   0, y:  15, z:  20 },
+  },
+
+  // Hands on hips — tsundere classic, elbows out
+  pout_pose: {
+    lArm:   { x:  15, y: -35, z: -35 },
+    rArm:   { x:  15, y:  35, z:  35 },
+    lElbow: { x:   0, y:  30, z:  95 },
+    rElbow: { x:   0, y: -30, z: -95 },
+    lWrist: { x:   0, y: -10, z:  -5 },
+    rWrist: { x:   0, y:  10, z:   5 },
+  },
+
+  // Right hand to chin, left arm supports right elbow
+  think: {
+    lArm:   { x: -20, y:  25, z: -30 },
+    rArm:   { x: -35, y:  15, z:  20 },
+    lElbow: { x:   0, y:  30, z:  85 },
+    rElbow: { x:   0, y: -30, z: -125 },
+    lWrist: { x:   0, y: -10, z:  -5 },
+    rWrist: { x:   0, y:   0, z:  25 },
+  },
+
+  // "Yay!" — arms raised to shoulder level, slight elbow bend
+  happy_bounce: {
+    lArm:   { x:  -5, y:  12, z: -80 },
+    rArm:   { x:  -5, y: -12, z:  80 },
+    lElbow: { x:   0, y:  20, z:  45 },
+    rElbow: { x:   0, y: -20, z: -45 },
+    lWrist: { x:   0, y:   0, z:  -5 },
+    rWrist: { x:   0, y:   0, z:   5 },
+  },
+};
+
+// Aliases — serve reuses present_coffee, blush reuses shy_pose
+GESTURE_POSES.serve = GESTURE_POSES.present_coffee;
+GESTURE_POSES.blush = GESTURE_POSES.shy_pose;
+
+// Expose for runtime debugging
+window._GESTURE_POSES = GESTURE_POSES;
+window._GESTURE_DURATIONS = GESTURE_DURATIONS;
+
+
+// ── AnimationController Class ─────────────────────────────────────────────────
+
 export class AnimationController {
   constructor(mesh, morphDict, bones) {
     this.mesh = mesh;
@@ -13,12 +126,15 @@ export class AnimationController {
     // State
     this.isSpeaking = false;
     this.speechVolume = 0;
+    this.smoothedSpeechVolume = 0;
     this.currentEmotion = 'neutral';
+    this.mousePos = new THREE.Vector2();
+    this.lookAtRotation = new THREE.Vector2();
     
     // Action Gestures State
     this.actionState = {
       type: 'idle',
-      startTime: 0,
+      elapsed: 0,
       duration: 1.0,
       intensity: 1.0
     };
@@ -72,24 +188,21 @@ export class AnimationController {
   }
 
   setupRestPose() {
-    // Initial cute resting pose
-    if (this.leftArm) {
-      this.leftArm.rotation.set(THREE.MathUtils.degToRad(10), THREE.MathUtils.degToRad(12), -THREE.MathUtils.degToRad(58));
-    }
-    if (this.rightArm) {
-      this.rightArm.rotation.set(THREE.MathUtils.degToRad(10), -THREE.MathUtils.degToRad(12), THREE.MathUtils.degToRad(58));
-    }
-    if (this.leftElbow) {
-      this.leftElbow.rotation.set(0, THREE.MathUtils.degToRad(25), THREE.MathUtils.degToRad(20));
-    }
-    if (this.rightElbow) {
-      this.rightElbow.rotation.set(0, -THREE.MathUtils.degToRad(25), -THREE.MathUtils.degToRad(20));
-    }
-    if (this.leftWrist) {
-      this.leftWrist.rotation.set(0, 0, -THREE.MathUtils.degToRad(10));
-    }
-    if (this.rightWrist) {
-      this.rightWrist.rotation.set(0, 0, THREE.MathUtils.degToRad(10));
+    // Apply initial rest pose from config
+    const boneMap = {
+      lArm:   this.leftArm,
+      rArm:   this.rightArm,
+      lElbow: this.leftElbow,
+      rElbow: this.rightElbow,
+      lWrist: this.leftWrist,
+      rWrist: this.rightWrist,
+    };
+
+    for (const [key, bone] of Object.entries(boneMap)) {
+      if (bone && REST_POSE[key]) {
+        const p = REST_POSE[key];
+        bone.rotation.set(DEG(p.x), DEG(p.y), DEG(p.z));
+      }
     }
   }
 
@@ -142,37 +255,26 @@ export class AnimationController {
   }
 
   /**
-   * Trigger rich action gesture with dynamic durations
+   * Trigger gesture action — durations & emotions pulled from config
    */
   triggerAction(action) {
-    console.log(`[AnimationController] Trigger Gesture Action: ${action}`);
-
-    let duration = 2.0;
-    if (action === 'wave') duration = 3.2;
-    if (action === 'present_coffee' || action === 'serve') duration = 3.5;
-    if (action === 'shy_pose' || action === 'blush') duration = 3.0;
-    if (action === 'pout_pose') duration = 3.0;
-    if (action === 'think') duration = 3.0;
-    if (action === 'happy_bounce') duration = 2.2;
-    if (action === 'nod') duration = 1.6;
-    if (action === 'tilt_head') duration = 2.5;
+    console.log(`[AnimationController] Trigger Gesture Action: ${action}`, {
+      hasPose: !!GESTURE_POSES[action],
+      poseKeys: GESTURE_POSES[action] ? Object.keys(GESTURE_POSES[action]) : 'none',
+      duration: GESTURE_DURATIONS[action] || 2.0,
+    });
 
     this.actionState = {
       type: action,
-      startTime: performance.now() / 1000,
-      duration: duration,
+      elapsed: 0,
+      duration: GESTURE_DURATIONS[action] || 2.0,
       intensity: 1.0
     };
 
-    // Auto synchronize emotion if triggered by gesture
-    if (action === 'wave' || action === 'happy_bounce') {
-      this.setEmotion('happy');
-    } else if (action === 'shy_pose' || action === 'blush') {
-      this.setEmotion('shy');
-    } else if (action === 'pout_pose') {
-      this.setEmotion('pout');
-    } else if (action === 'present_coffee' || action === 'serve') {
-      this.setEmotion('happy');
+    // Auto synchronize emotion if mapped
+    const emotion = GESTURE_EMOTIONS[action];
+    if (emotion) {
+      this.setEmotion(emotion);
     }
   }
 
@@ -181,14 +283,22 @@ export class AnimationController {
    */
   setSpeaking(speaking, volume = 0.6) {
     this.isSpeaking = speaking;
-    this.speechVolume = volume;
+    this.speechVolume = THREE.MathUtils.clamp(volume, 0, 1);
     if (!speaking) {
+      this.speechVolume = 0;
       this.setMorphTarget('vowel_a', 0);
       this.setMorphTarget('vowel_i', 0);
       this.setMorphTarget('vowel_u', 0);
       this.setMorphTarget('vowel_e', 0);
       this.setMorphTarget('vowel_o', 0);
     }
+  }
+
+  setMousePosition(x, y) {
+    this.mousePos.set(
+      THREE.MathUtils.clamp(x, -1, 1),
+      THREE.MathUtils.clamp(y, -1, 1)
+    );
   }
 
   setMorphTarget(name, targetValue) {
@@ -203,7 +313,7 @@ export class AnimationController {
    */
   update(delta, time) {
     this.updateAutoBlink(delta);
-    this.updateLipSync(time);
+    this.updateLipSync(delta, time);
     this.updateMorphTransitions(delta);
     this.updateFullBodyAnimation(delta, time);
   }
@@ -241,11 +351,19 @@ export class AnimationController {
   /**
    * Dynamic Lip Sync (Phonetic mouth flapping)
    */
-  updateLipSync(time) {
+  updateLipSync(delta, time) {
+    const volumeSmoothing = 1 - Math.exp(-12 * delta);
+    this.smoothedSpeechVolume = THREE.MathUtils.lerp(
+      this.smoothedSpeechVolume,
+      this.speechVolume,
+      volumeSmoothing
+    );
+
     if (this.isSpeaking) {
       const flap1 = Math.sin(time * 16) * 0.5 + 0.5;
       const flap2 = Math.sin(time * 26 + 1.4) * 0.3;
-      const openAmount = Math.max(0, Math.min(1.0, (flap1 + flap2) * (this.speechVolume || 0.7)));
+      const audioAmount = this.smoothedSpeechVolume > 0.02 ? this.smoothedSpeechVolume : 0.7;
+      const openAmount = THREE.MathUtils.clamp((flap1 + flap2) * audioAmount, 0, 1);
 
       this.applyDirectMorph('vowel_a', openAmount * 0.85);
       this.applyDirectMorph('vowel_e', openAmount * 0.35);
@@ -257,7 +375,8 @@ export class AnimationController {
    * Smooth Lerp morph transitions
    */
   updateMorphTransitions(delta) {
-    const lerpSpeed = Math.min(1.0, delta * 9.0);
+    const frameProgress = THREE.MathUtils.clamp(delta * 10.0, 0, 1);
+    const lerpSpeed = this.easeInOutCubic(frameProgress);
 
     for (const [name, target] of Object.entries(this.targetMorphs)) {
       const current = this.currentMorphs[name] || 0;
@@ -267,7 +386,14 @@ export class AnimationController {
       if (name !== 'blink' && !name.startsWith('vowel_')) {
         this.applyDirectMorph(name, next);
       }
+
     }
+  }
+
+  easeInOutCubic(value) {
+    return value < 0.5
+      ? 4 * value * value * value
+      : 1 - Math.pow(-2 * value + 2, 3) / 2;
   }
 
   applyDirectMorph(aliasName, weight) {
@@ -278,26 +404,43 @@ export class AnimationController {
   }
 
   /**
+   * Lerp a bone's XYZ rotations toward a target pose (degrees → radians).
+   * Returns { x, y, z } in radians. If targetDeg is null/undefined,
+   * the current values are returned unchanged.
+   */
+  _lerpPose(currentX, currentY, currentZ, targetDeg, weight) {
+    if (!targetDeg) return { x: currentX, y: currentY, z: currentZ };
+    return {
+      x: THREE.MathUtils.lerp(currentX, DEG(targetDeg.x), weight),
+      y: THREE.MathUtils.lerp(currentY, DEG(targetDeg.y), weight),
+      z: THREE.MathUtils.lerp(currentZ, DEG(targetDeg.z), weight),
+    };
+  }
+
+  /**
    * Procedural Full-Body Gesture & Motion Engine
    */
   updateFullBodyAnimation(delta, time) {
-    const currentTime = performance.now() / 1000;
-    const elapsedAction = currentTime - this.actionState.startTime;
+    this.actionState.elapsed = Math.min(
+      this.actionState.duration,
+      this.actionState.elapsed + delta
+    );
+    const elapsedAction = this.actionState.elapsed;
     const actionActive = elapsedAction < this.actionState.duration;
     
     // Normalized progress (0.0 to 1.0) with smooth ease in/out curve
     const progress = actionActive ? elapsedAction / this.actionState.duration : 1.0;
-    // Bell curve for action envelope (0 -> 1 -> 0)
-    const curve = actionActive ? Math.sin(progress * Math.PI) : 0;
+    // Bell curve for action envelope (0 → 1 → 0)
+    const curve = actionActive ? Math.sin(this.easeInOutCubic(progress) * Math.PI) : 0;
 
     const actionType = actionActive ? this.actionState.type : 'idle';
 
-    // -------------------------------------------------------------
-    // 1. BASE IDLE LIVING BREATHING & SWAY
-    // -------------------------------------------------------------
+    // ─── 1. BASE IDLE: BREATHING & MICRO-SWAY ────────────────────────
     const breatheSine = Math.sin(time * 2.2);
     const breatheCos = Math.cos(time * 1.8);
     const breathArm = breatheSine * 0.025;
+    const microSway = Math.sin(time * 1.37) * 0.008 + Math.sin(time * 2.83 + 1.7) * 0.004;
+    const microRoll = Math.cos(time * 1.11 + 0.4) * 0.006;
 
     // Center / Pelvis
     if (this.centerBone) {
@@ -333,141 +476,132 @@ export class AnimationController {
       this.upperBodyBone2.rotation.x = chestX;
     }
 
-    // -------------------------------------------------------------
-    // 2. HEAD & NECK PROCEDURAL GESTURES
-    // -------------------------------------------------------------
+    // ─── 2. HEAD & NECK PROCEDURAL GESTURES ──────────────────────────
     if (this.headBone) {
       let headPitch = breatheCos * 0.015;
       let headYaw = Math.sin(time * 1.0) * 0.025;
       let headRoll = Math.sin(time * 0.8) * 0.018;
 
-      if (actionType === 'nod') {
-        headPitch += Math.sin(progress * Math.PI * 4) * 0.18 * curve;
-      } else if (actionType === 'wave') {
-        headRoll -= 0.12 * curve; // Tilt head while waving
-        headPitch -= 0.05 * curve;
-      } else if (actionType === 'tilt_head' || actionType === 'think') {
-        headRoll += 0.22 * curve; // Inquisitive tilt
-        headYaw -= 0.1 * curve;
-      } else if (actionType === 'shy_pose' || actionType === 'blush') {
-        headPitch += 0.1 * curve;  // Look down bashfully
-        headRoll -= 0.12 * curve;
-        headYaw += 0.08 * curve;
-      } else if (actionType === 'pout_pose') {
-        headYaw -= 0.28 * curve;  // Turn head away
-        headRoll += 0.1 * curve;
-        headPitch += 0.05 * curve;
-      } else if (actionType === 'present_coffee' || actionType === 'serve') {
-        headPitch += 0.08 * curve;
+      switch (actionType) {
+        case 'nod':
+          headPitch += Math.sin(progress * Math.PI * 4) * 0.18 * curve;
+          break;
+        case 'wave':
+          headRoll -= 0.12 * curve; // Tilt head while waving
+          headPitch -= 0.05 * curve;
+          break;
+        case 'tilt_head':
+        case 'think':
+          headRoll += 0.22 * curve; // Inquisitive tilt
+          headYaw -= 0.1 * curve;
+          break;
+        case 'shy_pose':
+        case 'blush':
+          headPitch += 0.1 * curve;  // Look down bashfully
+          headRoll -= 0.12 * curve;
+          headYaw += 0.08 * curve;
+          break;
+        case 'pout_pose':
+          headYaw -= 0.28 * curve;  // Turn head away
+          headRoll += 0.1 * curve;
+          headPitch += 0.05 * curve;
+          break;
+        case 'present_coffee':
+        case 'serve':
+          headPitch += 0.08 * curve;
+          break;
       }
 
-      this.headBone.rotation.x = headPitch;
-      this.headBone.rotation.y = headYaw;
-      this.headBone.rotation.z = headRoll;
+      headPitch += microSway;
+      headRoll += microRoll;
+      this.updateLookAt(delta, headPitch, headYaw, headRoll);
     }
 
-    // -------------------------------------------------------------
-    // 3. ARMS & HANDS DYNAMIC GESTURE ENGINE
-    // -------------------------------------------------------------
-    // Base resting rotations
-    let lArmX = THREE.MathUtils.degToRad(10);
-    let lArmY = THREE.MathUtils.degToRad(12);
-    let lArmZ = -THREE.MathUtils.degToRad(58) + breathArm;
-
-    let rArmX = THREE.MathUtils.degToRad(10);
-    let rArmY = -THREE.MathUtils.degToRad(12);
-    let rArmZ = THREE.MathUtils.degToRad(58) - breathArm;
-
-    let lElbowX = 0, lElbowY = THREE.MathUtils.degToRad(25), lElbowZ = THREE.MathUtils.degToRad(20);
-    let rElbowX = 0, rElbowY = -THREE.MathUtils.degToRad(25), rElbowZ = -THREE.MathUtils.degToRad(20);
-
-    let lWristX = 0, lWristY = 0, lWristZ = -THREE.MathUtils.degToRad(10);
-    let rWristX = 0, rWristY = 0, rWristZ = THREE.MathUtils.degToRad(10);
-
-    // Apply specific dynamic gestures
-    if (actionType === 'wave') {
-      // Right hand raises up and waves side to side
-      rArmX = THREE.MathUtils.lerp(rArmX, -THREE.MathUtils.degToRad(25), curve);
-      rArmY = THREE.MathUtils.lerp(rArmY, THREE.MathUtils.degToRad(35), curve);
-      rArmZ = THREE.MathUtils.lerp(rArmZ, -THREE.MathUtils.degToRad(65), curve);
-
-      rElbowZ = THREE.MathUtils.lerp(rElbowZ, -THREE.MathUtils.degToRad(95), curve);
-      rElbowY = THREE.MathUtils.lerp(rElbowY, -THREE.MathUtils.degToRad(40), curve);
-
-      const waveMotion = Math.sin(progress * Math.PI * 10) * 0.45 * curve;
-      rWristZ = THREE.MathUtils.lerp(rWristZ, waveMotion, curve);
-    }
-    else if (actionType === 'present_coffee' || actionType === 'serve') {
-      // Both hands reach forward gently holding a coffee cup
-      lArmX = THREE.MathUtils.lerp(lArmX, -THREE.MathUtils.degToRad(35), curve);
-      rArmX = THREE.MathUtils.lerp(rArmX, -THREE.MathUtils.degToRad(35), curve);
-      lArmZ = THREE.MathUtils.lerp(lArmZ, -THREE.MathUtils.degToRad(25), curve);
-      rArmZ = THREE.MathUtils.lerp(rArmZ, THREE.MathUtils.degToRad(25), curve);
-
-      lElbowY = THREE.MathUtils.lerp(lElbowY, THREE.MathUtils.degToRad(55), curve);
-      rElbowY = THREE.MathUtils.lerp(rElbowY, -THREE.MathUtils.degToRad(55), curve);
-      lElbowZ = THREE.MathUtils.lerp(lElbowZ, THREE.MathUtils.degToRad(40), curve);
-      rElbowZ = THREE.MathUtils.lerp(rElbowZ, -THREE.MathUtils.degToRad(40), curve);
-
-      lWristY = THREE.MathUtils.lerp(lWristY, -THREE.MathUtils.degToRad(30), curve);
-      rWristY = THREE.MathUtils.lerp(rWristY, THREE.MathUtils.degToRad(30), curve);
-    }
-    else if (actionType === 'shy_pose' || actionType === 'blush') {
-      // Both hands come close to chest/cheeks bashfully
-      lArmZ = THREE.MathUtils.lerp(lArmZ, -THREE.MathUtils.degToRad(25), curve);
-      rArmZ = THREE.MathUtils.lerp(rArmZ, THREE.MathUtils.degToRad(25), curve);
-      lArmX = THREE.MathUtils.lerp(lArmX, -THREE.MathUtils.degToRad(15), curve);
-      rArmX = THREE.MathUtils.lerp(rArmX, -THREE.MathUtils.degToRad(15), curve);
-
-      lElbowZ = THREE.MathUtils.lerp(lElbowZ, THREE.MathUtils.degToRad(75), curve);
-      rElbowZ = THREE.MathUtils.lerp(rElbowZ, -THREE.MathUtils.degToRad(75), curve);
-      lElbowY = THREE.MathUtils.lerp(lElbowY, THREE.MathUtils.degToRad(45), curve);
-      rElbowY = THREE.MathUtils.lerp(rElbowY, -THREE.MathUtils.degToRad(45), curve);
-
-      lWristZ = THREE.MathUtils.lerp(lWristZ, -THREE.MathUtils.degToRad(40), curve);
-      rWristZ = THREE.MathUtils.lerp(rWristZ, THREE.MathUtils.degToRad(40), curve);
-    }
-    else if (actionType === 'pout_pose') {
-      // Hands on hips / elbows out
-      lArmZ = THREE.MathUtils.lerp(lArmZ, -THREE.MathUtils.degToRad(40), curve);
-      rArmZ = THREE.MathUtils.lerp(rArmZ, THREE.MathUtils.degToRad(40), curve);
-      lArmY = THREE.MathUtils.lerp(lArmY, -THREE.MathUtils.degToRad(30), curve);
-      rArmY = THREE.MathUtils.lerp(rArmY, THREE.MathUtils.degToRad(30), curve);
-
-      lElbowZ = THREE.MathUtils.lerp(lElbowZ, THREE.MathUtils.degToRad(90), curve);
-      rElbowZ = THREE.MathUtils.lerp(rElbowZ, -THREE.MathUtils.degToRad(90), curve);
-      lElbowY = THREE.MathUtils.lerp(lElbowY, THREE.MathUtils.degToRad(35), curve);
-      rElbowY = THREE.MathUtils.lerp(rElbowY, -THREE.MathUtils.degToRad(35), curve);
-    }
-    else if (actionType === 'think') {
-      // Right hand touches chin
-      rArmX = THREE.MathUtils.lerp(rArmX, -THREE.MathUtils.degToRad(25), curve);
-      rArmY = THREE.MathUtils.lerp(rArmY, THREE.MathUtils.degToRad(20), curve);
-      rArmZ = THREE.MathUtils.lerp(rArmZ, THREE.MathUtils.degToRad(15), curve);
-
-      rElbowZ = THREE.MathUtils.lerp(rElbowZ, -THREE.MathUtils.degToRad(110), curve);
-      rElbowY = THREE.MathUtils.lerp(rElbowY, -THREE.MathUtils.degToRad(45), curve);
-      rWristZ = THREE.MathUtils.lerp(rWristZ, THREE.MathUtils.degToRad(35), curve);
-    }
-    else if (actionType === 'happy_bounce') {
-      // Cheerful arm flair
-      lArmZ = THREE.MathUtils.lerp(lArmZ, -THREE.MathUtils.degToRad(75), curve);
-      rArmZ = THREE.MathUtils.lerp(rArmZ, THREE.MathUtils.degToRad(75), curve);
-      lElbowZ = THREE.MathUtils.lerp(lElbowZ, THREE.MathUtils.degToRad(40), curve);
-      rElbowZ = THREE.MathUtils.lerp(rElbowZ, -THREE.MathUtils.degToRad(40), curve);
+    if (this.neckBone) {
+      this.neckBone.rotation.x = this.lookAtRotation.x * 0.35 + microSway * 0.5;
+      this.neckBone.rotation.y = this.lookAtRotation.y * 0.35;
+      this.neckBone.rotation.z = microRoll * 0.35;
     }
 
-    // Apply Arm transforms
-    if (this.leftArm) this.leftArm.rotation.set(lArmX, lArmY, lArmZ);
-    if (this.rightArm) this.rightArm.rotation.set(rArmX, rArmY, rArmZ);
-    if (this.leftElbow) this.leftElbow.rotation.set(lElbowX, lElbowY, lElbowZ);
+    // ─── 3. ARMS & HANDS — DATA-DRIVEN GESTURE ENGINE ───────────────
+    // Start with rest pose + breathing offset
+    let lArmX   = DEG(REST_POSE.lArm.x);
+    let lArmY   = DEG(REST_POSE.lArm.y);
+    let lArmZ   = DEG(REST_POSE.lArm.z) + breathArm;
+
+    let rArmX   = DEG(REST_POSE.rArm.x);
+    let rArmY   = DEG(REST_POSE.rArm.y);
+    let rArmZ   = DEG(REST_POSE.rArm.z) - breathArm;
+
+    let lElbowX = DEG(REST_POSE.lElbow.x);
+    let lElbowY = DEG(REST_POSE.lElbow.y);
+    let lElbowZ = DEG(REST_POSE.lElbow.z);
+
+    let rElbowX = DEG(REST_POSE.rElbow.x);
+    let rElbowY = DEG(REST_POSE.rElbow.y);
+    let rElbowZ = DEG(REST_POSE.rElbow.z);
+
+    let lWristX = DEG(REST_POSE.lWrist.x);
+    let lWristY = DEG(REST_POSE.lWrist.y);
+    let lWristZ = DEG(REST_POSE.lWrist.z);
+
+    let rWristX = DEG(REST_POSE.rWrist.x);
+    let rWristY = DEG(REST_POSE.rWrist.y);
+    let rWristZ = DEG(REST_POSE.rWrist.z);
+
+    // Look up gesture pose from config and apply via lerp
+    const pose = GESTURE_POSES[actionType];
+    if (pose && curve > 0) {
+      if (!this._debuggedPose || this._debuggedPose !== actionType) {
+        this._debuggedPose = actionType;
+        console.log(`[AnimationController] Applying pose '${actionType}' curve=${curve.toFixed(3)}`, JSON.stringify(pose));
+      }
+      let r;
+
+      r = this._lerpPose(lArmX, lArmY, lArmZ, pose.lArm, curve);
+      lArmX = r.x; lArmY = r.y; lArmZ = r.z;
+
+      r = this._lerpPose(rArmX, rArmY, rArmZ, pose.rArm, curve);
+      rArmX = r.x; rArmY = r.y; rArmZ = r.z;
+
+      r = this._lerpPose(lElbowX, lElbowY, lElbowZ, pose.lElbow, curve);
+      lElbowX = r.x; lElbowY = r.y; lElbowZ = r.z;
+
+      r = this._lerpPose(rElbowX, rElbowY, rElbowZ, pose.rElbow, curve);
+      rElbowX = r.x; rElbowY = r.y; rElbowZ = r.z;
+
+      r = this._lerpPose(lWristX, lWristY, lWristZ, pose.lWrist, curve);
+      lWristX = r.x; lWristY = r.y; lWristZ = r.z;
+
+      r = this._lerpPose(rWristX, rWristY, rWristZ, pose.rWrist, curve);
+      rWristX = r.x; rWristY = r.y; rWristZ = r.z;
+
+      // ── Dynamic overlays for gestures with oscillation ──
+      if (actionType === 'wave') {
+        // Cute small wrist oscillation (shy/malu wave)
+        rWristZ += Math.sin(time * 8) * DEG(12) * curve;
+      }
+    }
+
+    // Apply shoulder micro-motion
+    if (this.leftShoulder) {
+      this.leftShoulder.rotation.x = microSway * 0.7;
+      this.leftShoulder.rotation.z = -microRoll;
+    }
+    if (this.rightShoulder) {
+      this.rightShoulder.rotation.x = microSway * 0.7;
+      this.rightShoulder.rotation.z = microRoll;
+    }
+
+    // Apply final arm transforms
+    if (this.leftArm)    this.leftArm.rotation.set(lArmX, lArmY, lArmZ);
+    if (this.rightArm)   this.rightArm.rotation.set(rArmX, rArmY, rArmZ);
+    if (this.leftElbow)  this.leftElbow.rotation.set(lElbowX, lElbowY, lElbowZ);
     if (this.rightElbow) this.rightElbow.rotation.set(rElbowX, rElbowY, rElbowZ);
-    if (this.leftWrist) this.leftWrist.rotation.set(lWristX, lWristY, lWristZ);
+    if (this.leftWrist)  this.leftWrist.rotation.set(lWristX, lWristY, lWristZ);
     if (this.rightWrist) this.rightWrist.rotation.set(rWristX, rWristY, rWristZ);
 
-    // -------------------------------------------------------------
-    // 4. SECONDARY PROCEDURAL PHYSICS: HAIR, RIBBONS & SKIRT
-    // -------------------------------------------------------------
+    // ─── 4. SECONDARY PROCEDURAL PHYSICS: HAIR, RIBBONS & SKIRT ─────
     const wind1 = Math.sin(time * 3.0) * 0.04;
     const wind2 = Math.cos(time * 2.5) * 0.035;
 
@@ -491,5 +625,20 @@ export class AnimationController {
       b.rotation.x = Math.sin(phase) * 0.015;
       b.rotation.z = Math.cos(phase) * 0.012;
     });
+  }
+
+  updateLookAt(delta, basePitch, baseYaw, baseRoll) {
+    // Screen Y grows downward. Keep that convention so moving the pointer
+    // upward makes the character look upward instead of downward.
+    const targetPitch = THREE.MathUtils.clamp(this.mousePos.y * 0.2, -0.2, 0.2);
+    const targetYaw = THREE.MathUtils.clamp(this.mousePos.x * 0.3, -0.4, 0.4);
+    const smoothing = 1 - Math.exp(-7 * delta);
+
+    this.lookAtRotation.x = THREE.MathUtils.lerp(this.lookAtRotation.x, targetPitch, smoothing);
+    this.lookAtRotation.y = THREE.MathUtils.lerp(this.lookAtRotation.y, targetYaw, smoothing);
+
+    this.headBone.rotation.x = basePitch + this.lookAtRotation.x;
+    this.headBone.rotation.y = baseYaw + this.lookAtRotation.y;
+    this.headBone.rotation.z = baseRoll;
   }
 }
