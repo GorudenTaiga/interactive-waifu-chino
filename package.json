@@ -5,8 +5,9 @@
   "main": "server/server.js",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n \"SERVER,CLIENT\" -c \"cyan,magenta\" \"npm run server\" \"npm run client\"",
-    "server": "node server/server.js",
+    "dev": "concurrently -n \"RVC,SERVER,CLIENT\" -c \"yellow,cyan,magenta\" \"npm run rvc\" \"npm run server\" \"npm run client\"",
+    "rvc": ".\\Retrieval-based-Voice-Conversion-WebUI\\.venv\\Scripts\\python.exe Retrieval-based-Voice-Conversion-WebUI\\rvc_api_server.py",
+    "server": "node --watch server/server.js",
     "client": "vite",
     "build": "vite build",
     "preview": "vite preview"
