@@ -41,7 +41,7 @@ Platform web interaktif 3D yang menampilkan karakter **Kafuu Chino (香風 智�
 
 ### Prasyarat
 - **Node.js**: v18+ sudah terinstall
-- **Python**: v3.10+ (sudah disiapkan di virtual environment `Retrieval-based-Voice-Conversion-WebUI/.venv`)
+- **Python**: v3.10+
 - **GPU (Opsional tapi direkomendasikan)**: NVIDIA GPU dengan dukungan CUDA untuk inferensi suara RVC yang cepat (~3-5 detik).
 
 ### 1. Install Dependencies Node.js
@@ -50,7 +50,10 @@ Buka terminal di root direktori project:
 npm install
 ```
 
-### 2. Konfigurasi `.env`
+### 2. Setup Python Virtual Environment
+Ikuti panduan yang ada pada README.md yang berada [disini](Retrieval-based-Voice-Conversion-WebUI/docs/en/README.en.md)
+
+### 3. Konfigurasi `.env`
 Salin file `.env.example` menjadi `.env` (atau gunakan `.env` yang sudah terisi default):
 ```env
 PORT=3000
